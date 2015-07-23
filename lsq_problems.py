@@ -55,12 +55,12 @@ class LSQBenchmarkProblem(object):
 
     def obj_value(self, x):
         f = self.fun(x)
-        return np.dot(f, f)
+        return 0.5 * np.dot(f, f)
 
     def grad(self, x):
         f = self.fun(x)
         J = self.jac(x)
-        return 2 * J.T.dot(f)
+        return J.T.dot(f)
 
 
 class LSQBenchmarkProblemFactory(object):
@@ -962,9 +962,7 @@ class Watson12(Watson):
         self.specs += [
             (self.x0, (-np.inf, np.inf)),
             (self.x0, ([-1.0, 0, -1, -1,  -1, 0, -3,  0, -10,  0, -5, 0],
-                       [0,   0.9, 0,  0.3, 0, 1,  0, 10,  0,  10,  0, 1])),
-            (self.x0, ([-1.0,  0, -1,   -1,  -1, 0, -3,  0,  -10,   0, -5, 0],
-                       [0,   0.9,  0,  0.0,   0, 1,  0,  10,  0,   10,  0, 1]))
+                       [0,   0.9, 0,  0.3, 0, 1,  0, 10,  0,  10,  0, 1]))
         ]
 
 
@@ -1357,4 +1355,3 @@ def extract_lsq_problems():
 if __name__ == '__main__':
     f = BroydenTridiagonal10K()
     print(f.check_jacobian())
-

@@ -64,4 +64,4 @@ target/
 *.txt
 
 #Temporary py files
-benchmarks/run_single.py
+./run_single.py

@@ -8,7 +8,7 @@ import numpy as np
 from scipy.optimize import fmin_l_bfgs_b, leastsq
 from scipy.optimize import least_squares
 from leastsqbound import leastsqbound
-from scipy.optimize._lsq_bounds import (
+from scipy.optimize._lsq_common import (
     find_active_constraints, make_strictly_feasible, scaling_vector)
 
 from lsq_problems import extract_lsq_problems
@@ -29,10 +29,10 @@ def run_least_squares(problem, ftol, xtol, gtol, jac, **kwargs):
     result = least_squares(problem.fun, problem.x0, jac=jac, bounds=(lb, ub),
                            ftol=ftol, gtol=gtol, xtol=xtol, **kwargs)
     x = result.x
-    g = 0.5 * problem.grad(x)
+    g = problem.grad(x)
     optimality = CL_optimality(result.x, g, lb, ub)
 
-    return (result.nfev, optimality, result.obj_value,
+    return (result.nfev, optimality, result.cost,
             np.sum(result.active_mask != 0), result.status)
 
 
@@ -70,14 +70,15 @@ def run_leastsq_bound(problem, ftol, xtol, gtol, jac,
 
     x, cov_x, info, mesg, ier = leastsqbound(
         problem.fun, problem.x0, bounds=bounds, full_output=True,
-        Dfun=jac, ftol=ftol, xtol=xtol, gtol=gtol, diag=diag, **kwargs
-    )
+        Dfun=jac, ftol=ftol, xtol=xtol, gtol=gtol, diag=diag, **kwargs)
+
     x = make_strictly_feasible(x, lb, ub)
     f = problem.fun(x)
-    g = 0.5 * problem.grad(x)
+    g = problem.grad(x)
     optimality = CL_optimality(x, g, lb, ub)
     active = find_active_constraints(x, lb, ub)
-    return info['nfev'], optimality, np.dot(f, f), np.sum(active != 0), ier
+    return (info['nfev'], optimality, 0.5 * np.dot(f, f),
+            np.sum(active != 0), ier)
 
 
 def run_l_bfgs_b(problem, ftol, gtol, xtol, jac):
@@ -89,13 +90,13 @@ def run_l_bfgs_b(problem, ftol, gtol, xtol, jac):
     else:
         grad = problem.grad
         approx_grad = False
-    x, obj_value, info = fmin_l_bfgs_b(
+    x, cost, info = fmin_l_bfgs_b(
         problem.obj_value, problem.x0, fprime=grad, bounds=bounds,
         approx_grad=approx_grad, m=100, factr=factr, pgtol=gtol, iprint=-1)
-    g = 0.5 * problem.grad(x)
+    g = problem.grad(x)
     optimality = CL_optimality(x, g, l, u)
     active = find_active_constraints(x, l, u)
-    return (info['funcalls'], optimality, obj_value, np.sum(active != 0),
+    return (info['funcalls'], optimality, cost, np.sum(active != 0),
             info['warnflag'])
 
 
@@ -110,6 +111,8 @@ METHODS = OrderedDict([
         method='trf', tr_solver='lsmr', tr_options={'regularize': False}))),
     ("trf-lsmr-reg", (run_least_squares, dict(
         method='trf', tr_solver='lsmr'))),
+    ("trf-lsmr-s", (run_least_squares, dict(
+        method='trf', tr_solver='lsmr', scaling='jac'))),
     ("lm", (run_least_squares, dict(method='lm', scaling=1.0))),
     ("lm-s", (run_least_squares, dict(method='lm', scaling='jac'))),
     ('leastsqbound', (run_leastsq_bound, dict(scaling=None))),
@@ -131,8 +134,8 @@ STATUS_TO_CODE = {
 def run_benchmark(problems, ftol, xtol, gtol, jac,
                   methods=None, benchmark_name=None):
     header = "{:<25} {:<5} {:<5} {:<15} {:<5} {:<10} {:<10} {:<8} {:<8}".\
-        format("problem", "n", "m", "solver", "nfev", "g norm",
-               "value", "active", "status")
+        format("problem", "n", "m", "solver", "nfev",
+               "g_norm", "cost", "active", "status")
 
     if benchmark_name is not None:
         print(benchmark_name.center(len(header)))
@@ -197,18 +200,18 @@ def main():
         args.b = True
         args.s = True
     if args.u:
-        methods = ['trf', 'dogbox']
+        methods = ['trf', 'trf-s']
         run_benchmark(u, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Unbounded problems")
     if args.b:
-        methods = ['trf', 'dogbox']
+        methods = ['dogbox', 'dogbox-s', 'trf', 'trf-s']
         # methods = ['dogbox', 'trf', 'trf-s', 'leastsqbound', 'l-bfgs-b']
         # methods = ['leastsqbound', 'trf', 'dogbox', 'l-bfgs-b']
         run_benchmark(b, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Bounded problems")
     if args.s:
-        methods = ['trf-lsmr', 'trf-lsmr-reg']
-        # methods = ['l-bfgs-b', 'trf-lsmr']
+        # methods = ['trf-lsmr-reg', 'dogbox-lsmr']
+        methods = ['trf-lsmr-reg', 'trf-lsmr-s']
         run_benchmark(s, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Sparse problems")
 
