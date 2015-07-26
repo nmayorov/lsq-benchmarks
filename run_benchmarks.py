@@ -8,8 +8,9 @@ import numpy as np
 from scipy.optimize import fmin_l_bfgs_b, leastsq
 from scipy.optimize import least_squares
 from leastsqbound import leastsqbound
-from scipy.optimize._lsq_common import (
-    find_active_constraints, make_strictly_feasible, scaling_vector)
+from scipy.optimize._lsq_common import (find_active_constraints,
+                                        make_strictly_feasible)
+from scipy.optimize._lsq_trf import scaling_vector
 
 from lsq_problems import extract_lsq_problems
 
@@ -104,7 +105,7 @@ METHODS = OrderedDict([
     ("dogbox", (run_least_squares, dict(method='dogbox'))),
     ("dogbox-s", (run_least_squares, dict(method='dogbox', scaling='jac'))),
     ("dogbox-lsmr", (run_least_squares,
-                     dict(method='dogbox', tr_solver='lsmr'))),
+                     dict(method='dogbox', tr_solver='lsmr', scaling='jac'))),
     ("trf", (run_least_squares, dict(method='trf'))),
     ("trf-s", (run_least_squares, dict(method='trf', scaling='jac'))),
     ("trf-lsmr", (run_least_squares, dict(
@@ -195,12 +196,13 @@ def main():
         sys.stdout = open(args.output, "w")
 
     u, b, s = extract_lsq_problems()
+
     if not args.u and not args.b and not args.s:
         args.u = True
         args.b = True
         args.s = True
     if args.u:
-        methods = ['trf', 'trf-s']
+        methods = ['dogbox-lsmr']
         run_benchmark(u, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Unbounded problems")
     if args.b:
@@ -211,7 +213,7 @@ def main():
                       methods=methods, benchmark_name="Bounded problems")
     if args.s:
         # methods = ['trf-lsmr-reg', 'dogbox-lsmr']
-        methods = ['trf-lsmr-reg', 'trf-lsmr-s']
+        methods = ['dogbox-lsmr', 'trf-lsmr']
         run_benchmark(s, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Sparse problems")
 
