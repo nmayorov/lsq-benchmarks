@@ -107,6 +107,7 @@ METHODS = OrderedDict([
     ("dogbox-lsmr", (run_least_squares,
                      dict(method='dogbox', tr_solver='lsmr', scaling='jac'))),
     ("trf", (run_least_squares, dict(method='trf'))),
+    ("trf-loss", (run_least_squares, dict(method='trf', loss='soft_l1'))),
     ("trf-s", (run_least_squares, dict(method='trf', scaling='jac'))),
     ("trf-lsmr", (run_least_squares, dict(
         method='trf', tr_solver='lsmr', tr_options={'regularize': False}))),
@@ -202,11 +203,11 @@ def main():
         args.b = True
         args.s = True
     if args.u:
-        methods = ['dogbox-lsmr']
+        methods = ['trf', 'dogbox']
         run_benchmark(u, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Unbounded problems")
     if args.b:
-        methods = ['dogbox', 'dogbox-s', 'trf', 'trf-s']
+        methods = ['trf', 'dogbox']
         # methods = ['dogbox', 'trf', 'trf-s', 'leastsqbound', 'l-bfgs-b']
         # methods = ['leastsqbound', 'trf', 'dogbox', 'l-bfgs-b']
         run_benchmark(b, args.ftol, args.xtol, args.gtol, args.jac,
