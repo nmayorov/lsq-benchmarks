@@ -13,6 +13,7 @@ from scipy.optimize._lsq_common import (find_active_constraints,
 from scipy.optimize._lsq_trf import scaling_vector
 
 from lsq_problems import extract_lsq_problems
+from extract_nist_problems import collect_nist_problems
 
 
 def CL_optimality(x, g, lb, ub):
@@ -197,6 +198,7 @@ def main():
         sys.stdout = open(args.output, "w")
 
     u, b, s = extract_lsq_problems()
+    u += collect_nist_problems()
 
     if not args.u and not args.b and not args.s:
         args.u = True
