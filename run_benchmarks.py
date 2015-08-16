@@ -5,15 +5,12 @@ from collections import OrderedDict
 import sys
 
 import numpy as np
-from scipy.optimize import fmin_l_bfgs_b, leastsq
-from scipy.optimize import least_squares
-from leastsqbound import leastsqbound
-from scipy.optimize._lsq_common import (find_active_constraints,
-                                        make_strictly_feasible)
-from scipy.optimize._lsq_trf import scaling_vector
+from scipy.optimize import fmin_l_bfgs_b, leastsq, least_squares
+from scipy.optimize._lsq.common import (
+    find_active_constraints, make_strictly_feasible, scaling_vector)
 
+from leastsqbound import leastsqbound
 from lsq_problems import extract_lsq_problems
-from extract_nist_problems import collect_nist_problems
 
 
 def CL_optimality(x, g, lb, ub):
@@ -39,7 +36,8 @@ def run_least_squares(problem, ftol, xtol, gtol, jac, **kwargs):
 
 
 def scipy_bounds(problem):
-    n = problem.x0.shape[0]
+    x0 = np.asarray(problem.x0)
+    n = x0.size
     lb, ub = map(np.asarray, problem.bounds)
     if lb.ndim == 0:
         lb = np.resize(lb, n)
@@ -110,13 +108,8 @@ METHODS = OrderedDict([
     ("trf", (run_least_squares, dict(method='trf'))),
     ("trf-loss", (run_least_squares, dict(method='trf', loss='soft_l1'))),
     ("trf-s", (run_least_squares, dict(method='trf', scaling='jac'))),
-    ("trf-lsmr", (run_least_squares, dict(
-        method='trf', tr_solver='lsmr', tr_options={'regularize': False}))),
-    ("trf-lsmr-reg", (run_least_squares, dict(
-        method='trf', tr_solver='lsmr'))),
-    ("trf-lsmr-s", (run_least_squares, dict(
-        method='trf', tr_solver='lsmr', scaling='jac'))),
-    ("lm", (run_least_squares, dict(method='lm', scaling=1.0))),
+    ("trf-lsmr", (run_least_squares, dict(method='trf', tr_solver='lsmr'))),
+    ("lm", (run_least_squares, dict(method='lm'))),
     ("lm-s", (run_least_squares, dict(method='lm', scaling='jac'))),
     ('leastsqbound', (run_leastsq_bound, dict(scaling=None))),
     ("l-bfgs-b", (run_l_bfgs_b, dict())),
@@ -130,7 +123,10 @@ STATUS_TO_CODE = {
     1: "G",
     2: "F",
     3: "X",
-    4: "XF"
+    4: "XF",
+    5: "MF",
+    6: "MF",
+    7: "MF"
 }
 
 
@@ -185,7 +181,7 @@ def parse_arguments():
                         default='exact', help="How to compute Jacobian.")
     parser.add_argument("-u", action='store_true', help="Benchmark unbounded")
     parser.add_argument("-b", action='store_true', help="Benchmark bounded.")
-    parser.add_argument("-s", action="store_true", help="Sparse bounded.")
+    parser.add_argument("-s", action="store_true", help="Benchmark sparse.")
     parser.add_argument("-ftol", type=float, default=tol)
     parser.add_argument("-xtol", type=float, default=tol)
     parser.add_argument("-gtol", type=float, default=tol)
@@ -198,25 +194,22 @@ def main():
         sys.stdout = open(args.output, "w")
 
     u, b, s = extract_lsq_problems()
-    u += collect_nist_problems()
 
-    if not args.u and not args.b and not args.s:
+    if not args.u and not args.b and not args.s and not args.n:
         args.u = True
         args.b = True
         args.s = True
+
     if args.u:
-        methods = ['trf', 'dogbox']
+        methods = ['lm', 'trf', 'dogbox']
         run_benchmark(u, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Unbounded problems")
     if args.b:
-        methods = ['trf', 'dogbox']
-        # methods = ['dogbox', 'trf', 'trf-s', 'leastsqbound', 'l-bfgs-b']
-        # methods = ['leastsqbound', 'trf', 'dogbox', 'l-bfgs-b']
+        methods = ['lm', 'trf', 'dogbox']
         run_benchmark(b, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Bounded problems")
     if args.s:
-        # methods = ['trf-lsmr-reg', 'dogbox-lsmr']
-        methods = ['dogbox-lsmr', 'trf-lsmr']
+        methods = ['trf-lsmr', 'dogbox-lsmr']
         run_benchmark(s, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Sparse problems")
 

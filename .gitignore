@@ -64,4 +64,5 @@ target/
 *.txt
 
 #Temporary py files
-./run_single.py
+run_single.py
+lmfit

@@ -4,12 +4,14 @@
 from __future__ import division, print_function
 
 import inspect
+import os
 import sys
 
 import numpy as np
 from numpy.polynomial.chebyshev import Chebyshev
-from scipy.sparse import lil_matrix, csr_matrix
+from scipy.sparse import lil_matrix
 from scipy.optimize._numdiff import check_derivative, group_columns
+from scipy.optimize._lsq.common import make_strictly_feasible
 
 
 class LSQBenchmarkProblem(object):
@@ -42,7 +44,7 @@ class LSQBenchmarkProblem(object):
         Lower and upper bounds on independent variables.
     """
 
-    def __init__(self, name, n, m, fun, jac, x0, bounds=(None, None),
+    def __init__(self, name, n, m, fun, jac, x0, bounds=(-np.inf, np.inf),
                  sparsity=None):
         self.name = name
         self.n = n
@@ -61,6 +63,24 @@ class LSQBenchmarkProblem(object):
         f = self.fun(x)
         J = self.jac(x)
         return J.T.dot(f)
+
+    def check_jacobian(self):
+        if self.jac is None:
+            return None
+
+        if self.sparsity is not None:
+            sparse_diff = True
+            groups = group_columns(self.sparsity)
+            sparsity = (self.sparsity, groups)
+        else:
+            sparse_diff = False
+            sparsity = None
+
+        lb, ub = [np.resize(b, self.n) for b in self.bounds]
+        x = self.x0 + np.random.randn(self.n)
+        x = make_strictly_feasible(x, lb, ub)
+        return check_derivative(self.fun, self.jac, x, bounds=self.bounds,
+                                sparse_diff=sparse_diff, sparsity=sparsity)
 
 
 class LSQBenchmarkProblemFactory(object):
@@ -99,23 +119,6 @@ class LSQBenchmarkProblemFactory(object):
         self._adjust_names(bounded, "_B")
 
         return unbounded, bounded
-
-    def check_jacobian(self):
-        accuracy = []
-        if self.sparsity is not None:
-            sparse_diff = True
-            groups = group_columns(self.sparsity)
-            sparsity = (self.sparsity, groups)
-        else:
-            sparse_diff = False
-            sparsity = None
-
-        for x0, bounds in self.specs:
-            x = x0 + np.random.randn(self.n)
-            acc = check_derivative(self.fun, self.jac, x, bounds=bounds,
-                                   sparse_diff=sparse_diff, sparsity=sparsity)
-            accuracy.append(acc)
-        return accuracy
 
     def fun(self, x):
         raise NotImplementedError
@@ -331,7 +334,7 @@ class ThermistorResistance(LSQBenchmarkProblemFactory):
         ]
         super(ThermistorResistance, self).__init__(3, 16, specs)
 
-        self.t = 5 + 45 * (1 + np.arange(self.m, dtype=float))
+        self.t = 50.0 + 5 * np.arange(self.m)
         self.y = np.array(
             [3.478e4, 2.861e4, 2.365e4, 1.963e4, 1.637e4, 1.372e4, 1.154e4,
              9.744e3, 8.261e3, 7.03e3, 6.005e3, 5.147e3, 4.427e3, 3.82e3,
@@ -1103,17 +1106,17 @@ class Trigonometric(LSQBenchmarkProblemFactory):
         return J
 
 
-class TrigonometricBadRank(Trigonometric):
-    def __init__(self):
-        super(TrigonometricBadRank, self).__init__()
-
-    def fun(self, x):
-        f = super(TrigonometricBadRank, self).fun(x)
-        return f[:-1]
-
-    def jac(self, x):
-        J = super(TrigonometricBadRank, self).jac(x)
-        return J[:-1]
+# class TrigonometricBadRank(Trigonometric):
+#     def __init__(self):
+#         super(TrigonometricBadRank, self).__init__()
+#
+#     def fun(self, x):
+#         f = super(TrigonometricBadRank, self).fun(x)
+#         return f[:-1]
+#
+#     def jac(self, x):
+#         J = super(TrigonometricBadRank, self).jac(x)
+#         return J[:-1]
 
 
 class PowellSingular(LSQBenchmarkProblemFactory):
@@ -1329,6 +1332,529 @@ class BroydenTridiagonal10K(BroydenTridiagonal):
         super(BroydenTridiagonal10K, self).__init__(10000)
 
 
+# NIST nonlinear regression problems.
+
+
+thisdir, thisfile = os.path.split(__file__)
+NIST_DIR = os.path.join(thisdir, 'NIST_STRD')
+
+
+def read_nist_data(dataset):
+    """NIST STRD data is in a simple, fixed format with
+    line numbers being significant!
+    """
+    finp = open(os.path.join(NIST_DIR, "%s.dat" % dataset), 'r')
+    lines = [l[:-1] for l in finp.readlines()]
+    finp.close()
+    ModelLines = lines[30:39]
+    ParamLines = lines[40:58]
+    DataLines = lines[60:]
+
+    words = ModelLines[1].strip().split()
+    nparams = int(words[0])
+
+    start1 = [0]*nparams
+    start2 = [0]*nparams
+    certval = [0]*nparams
+    certerr = [0]*nparams
+    for i, text in enumerate(ParamLines[:nparams]):
+        [s1, s2, val, err] = [float(x) for x in text.split('=')[1].split()]
+        start1[i] = s1
+        start2[i] = s2
+        certval[i] = val
+        certerr[i] = err
+
+    #
+    for t in ParamLines[nparams:]:
+        t = t.strip()
+        if ':' not in t:
+            continue
+        val = float(t.split(':')[1])
+        if t.startswith('Residual Sum of Squares'):
+            sum_squares = val
+        elif t.startswith('Residual Standard Deviation'):
+            std_dev = val
+        elif t.startswith('Degrees of Freedom'):
+            nfree = int(val)
+        elif t.startswith('Number of Observations'):
+            ndata = int(val)
+
+    y, x = [], []
+    for d in DataLines:
+        vals = [float(i) for i in d.strip().split()]
+        y.append(vals[0])
+        if len(vals) > 2:
+            x.append(vals[1:])
+        else:
+            x.append(vals[1])
+
+    y = np.array(y)
+    x = np.array(x)
+    out = {'y': y, 'x': x, 'nparams': nparams, 'ndata': ndata,
+           'nfree': nfree, 'start1': start1, 'start2': start2,
+           'sum_squares': sum_squares, 'std_dev': std_dev,
+           'cert': certval,  'cert_values': certval,  'cert_stderr': certerr}
+    return out
+
+
+class NISTProblemFactory(LSQBenchmarkProblemFactory):
+    def __init__(self, problem_name):
+        data = read_nist_data(problem_name)
+        m = data['ndata']
+        n = data['nparams']
+        self.x = data['x']
+        self.y = data['y']
+
+        specs = [
+            (data['start1'], (-np.inf, np.inf)),
+            (data['start2'], (-np.inf, np.inf))
+        ]
+
+        super(NISTProblemFactory, self).__init__(n, m, specs)
+
+
+class NIST_Bennett5(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Bennett5, self).__init__('Bennett5')
+
+    def fun(self, b):
+        return b[0] * (b[1] + self.x)**(-1/b[2]) - self.y
+
+    def jac(self, b):
+        t = b[1] + self.x
+        return np.vstack((
+            (b[1] + self.x)**(-1/b[2]),
+            -b[0] / b[2] * (b[1] + self.x)**(-1/b[2] - 1),
+            b[0] / b[2]**2 * (b[1] + self.x)**(-1/b[2]) * np.log(t)
+        )).T
+
+
+class NIST_BoxBOD(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_BoxBOD, self).__init__('BoxBOD')
+
+    def fun(self, b):
+        return b[0] * (1 - np.exp(-b[1] * self.x)) - self.y
+
+    def jac(self, b):
+        return np.vstack((
+            1 - np.exp(-b[1] * self.x),
+            b[0] * self.x * np.exp(-b[1] * self.x)
+        )).T
+
+
+class NIST_Chwirut(NISTProblemFactory):
+    def __init__(self, i):
+        super(NIST_Chwirut, self).__init__('Chwirut' + str(i))
+
+    def fun(self, b):
+        return np.exp(-b[0] * self.x) / (b[1] + b[2] * self.x) - self.y
+
+    def jac(self, b):
+        denom = b[1] + b[2] * self.x
+        return np.vstack((
+            -self.x * np.exp(-b[0] * self.x) / denom,
+            -np.exp(-b[0] * self.x) / denom**2,
+            -self.x * np.exp(-b[0] * self.x) / denom**2
+        )).T
+
+
+class NIST_Chwirut1(NIST_Chwirut):
+    def __init__(self):
+        super(NIST_Chwirut1, self).__init__(1)
+
+
+class NIST_Chwirut2(NIST_Chwirut):
+    def __init__(self):
+        super(NIST_Chwirut2, self).__init__(2)
+
+
+class NIST_DanWood(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_DanWood, self).__init__('DanWood')
+
+    def fun(self, b):
+        return b[0] * self.x**b[1] - self.y
+
+    def jac(self, b):
+        return np.vstack((
+            self.x**b[1],
+            b[0] * np.log(self.x) * self.x**b[1]
+        )).T
+
+
+class NIST_ENSO(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_ENSO, self).__init__('ENSO')
+
+    def fun(self, b):
+        return (b[0] + b[1] * np.cos(2 * np.pi * self.x / 12) +
+                b[2] * np.sin(2 * np.pi * self.x / 12) +
+                b[4] * np.cos(2 * np.pi * self.x / b[3]) +
+                b[5] * np.sin(2 * np.pi * self.x / b[3]) +
+                b[7] * np.cos(2 * np.pi * self.x / b[6]) +
+                b[8] * np.sin(2 * np.pi * self.x / b[6]) - self.y)
+
+    def jac(self, b):
+        return np.vstack((
+            np.ones_like(self.x),
+            np.cos(2 * np.pi * self.x / 12),
+            np.sin(2 * np.pi * self.x / 12),
+            2 * np.pi * self.x / b[3]**2 * (
+                b[4] * np.sin(2 * np.pi * self.x / b[3]) -
+                b[5] * np.cos(2 * np.pi * self.x / b[3])),
+            np.cos(2 * np.pi * self.x / b[3]),
+            np.sin(2 * np.pi * self.x / b[3]),
+            2 * np.pi * self.x / b[6]**2 * (
+                b[7] * np.sin(2 * np.pi * self.x / b[6]) -
+                b[8] * np.cos(2 * np.pi * self.x / b[6])),
+            np.cos(2 * np.pi * self.x / b[6]),
+            np.sin(2 * np.pi * self.x / b[6])
+        )).T
+
+
+class NIST_Eckerle4(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Eckerle4, self).__init__('Eckerle4')
+
+    def fun(self, b):
+        return b[0] / b[1] * np.exp(-0.5*((self.x - b[2]) / b[1])**2) - self.y
+
+    def jac(self, b):
+        e = np.exp(-0.5*((self.x - b[2]) / b[1])**2)
+        return np.vstack((
+            e / b[1],
+            b[0] * e / b[1]**2 * (((self.x - b[2]) / b[1])**2 - 1),
+            b[0] * (self.x - b[2]) * e / b[1]**3
+        )).T
+
+
+class NIST_Gauss(NISTProblemFactory):
+    def __init__(self, i):
+        super(NIST_Gauss, self).__init__("Gauss" + str(i))
+
+    def fun(self, b):
+        return (b[0] * np.exp(-b[1] * self.x) +
+                b[2] * np.exp(-(self.x - b[3])**2 / b[4]**2) +
+                b[5] * np.exp(-(self.x - b[6])**2 / b[7]**2) - self.y)
+
+    def jac(self, b):
+        return np.vstack((
+            np.exp(-b[1] * self.x),
+            -b[0] * self.x * np.exp(-b[1] * self.x),
+            np.exp(-(self.x - b[3])**2 / b[4]**2),
+            2 * b[2] * (self.x - b[3]) / b[4]**2 *
+            np.exp(-(self.x - b[3])**2 / b[4]**2),
+            2 * b[2] * (self.x - b[3])**2 / b[4]**3 *
+            np.exp(-(self.x - b[3])**2 / b[4]**2),
+            np.exp(-(self.x - b[6])**2 / b[7]**2),
+            2 * b[5] * (self.x - b[6]) / b[7]**2 *
+            np.exp(-(self.x - b[6])**2 / b[7]**2),
+            2 * b[5] * (self.x - b[6])**2 / b[7]**3 *
+            np.exp(-(self.x - b[6])**2 / b[7]**2)
+        )).T
+
+
+class NIST_Gauss1(NIST_Gauss):
+    def __init__(self):
+        super(NIST_Gauss1, self).__init__(1)
+
+
+class NIST_Gauss2(NIST_Gauss):
+    def __init__(self):
+        super(NIST_Gauss2, self).__init__(2)
+
+
+class NIST_Gauss3(NIST_Gauss):
+    def __init__(self):
+        super(NIST_Gauss3, self).__init__(3)
+
+
+class NIST_Hahn1(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Hahn1, self).__init__("Hahn1")
+
+    def fun(self, b):
+        return (
+            (b[0] + b[1] * self.x + b[2] * self.x**2 + b[3] * self.x**3) /
+            (1 + b[4] * self.x + b[5] * self.x**2 + b[6] * self.x**3) -
+            self.y)
+
+    def jac(self, b):
+        numer = b[0] + b[1] * self.x + b[2] * self.x**2 + b[3] * self.x**3
+        denom = 1 + b[4] * self.x + b[5] * self.x**2 + b[6] * self.x**3
+
+        return np.vstack((
+            1 / denom,
+            self.x / denom,
+            self.x**2 / denom,
+            self.x**3 / denom,
+            -self.x * numer / denom**2,
+            -self.x**2 * numer / denom**2,
+            -self.x**3 * numer / denom**2
+        )).T
+
+
+class NIST_Kirby2(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Kirby2, self).__init__('Kirby2')
+
+    def fun(self, b):
+        return ((b[0] + b[1] * self.x + b[2] * self.x**2) /
+                (1 + b[3] * self.x + b[4] * self.x**2) - self.y)
+
+    def jac(self, b):
+        numer = b[0] + b[1] * self.x + b[2] * self.x**2
+        denom = 1 + b[3] * self.x + b[4] * self.x**2
+        return np.vstack((
+            1 / denom,
+            self.x / denom,
+            self.x**2 / denom,
+            -self.x * numer / denom**2,
+            -self.x**2 * numer / denom**2
+        )).T
+
+
+class NIST_Lanczos(NISTProblemFactory):
+    def __init__(self, i):
+        super(NIST_Lanczos, self).__init__('Lanczos' + str(i))
+
+    def fun(self, b):
+        return (b[0] * np.exp(-b[1] * self.x) +
+                b[2] * np.exp(-b[3] * self.x) +
+                b[4] * np.exp(-b[5] * self.x) - self.y)
+
+    def jac(self, b):
+        return np.vstack((
+            np.exp(-b[1] * self.x),
+            -b[0] * self.x * np.exp(-b[1] * self.x),
+            np.exp(-b[3] * self.x),
+            -b[2] * self.x * np.exp(-b[3] * self.x),
+            np.exp(-b[5] * self.x),
+            -b[4] * self.x * np.exp(-b[5] * self.x)
+        )).T
+
+
+class NIST_Lanczos1(NIST_Lanczos):
+    def __init__(self):
+        super(NIST_Lanczos1, self).__init__(1)
+
+
+class NIST_Lancsoz2(NIST_Lanczos):
+    def __init__(self):
+        super(NIST_Lancsoz2, self).__init__(2)
+
+
+class NIST_Lancsoz3(NIST_Lanczos):
+    def __init__(self):
+        super(NIST_Lancsoz3, self).__init__(3)
+
+
+class NIST_MGH09(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_MGH09, self).__init__('MGH09')
+
+    def fun(self, b):
+        return (b[0] * (self.x**2 + b[1] * self.x[1]) /
+                (self.x**2 + b[2] * self.x + b[3]) - self.y)
+
+    def jac(self, b):
+        numer = self.x**2 + b[1] * self.x[1]
+        denom = self.x**2 + b[2] * self.x + b[3]
+        return np.vstack((
+            numer / denom,
+            b[0] * self.x[1] / denom,
+            -b[0] * self.x * numer / denom**2,
+            -b[0] * numer / denom**2
+        )).T
+
+
+class NIST_MGH10(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_MGH10, self).__init__('MGH10')
+
+    def fun(self, b):
+        return b[0] * np.exp(b[1] / (self.x + b[2])) - self.y
+
+    def jac(self, b):
+        e = np.exp(b[1] / (self.x + b[2]))
+        return np.vstack((
+            e,
+            b[0] / (self.x + b[2]) * e,
+            -b[0] * b[1] / (self.x + b[2])**2 * e
+        )).T
+
+
+class NIST_MGH17(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_MGH17, self).__init__('MGH17')
+
+    def fun(self, b):
+        return (b[0] + b[1] * np.exp(-b[3] * self.x) +
+                b[2] * np.exp(-b[4] * self.x) - self.y)
+
+    def jac(self, b):
+        return np.vstack((
+            np.ones_like(self.x),
+            np.exp(-b[3] * self.x),
+            np.exp(-b[4] * self.x),
+            -b[1] * self.x * np.exp(-b[3] * self.x),
+            -b[2] * self.x * np.exp(-b[4] * self.x)
+        )).T
+
+
+class NIST_Misra1a(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Misra1a, self).__init__("Misra1a")
+
+    def fun(self, b):
+        return b[0] * (1 - np.exp(-b[1] * self.x)) - self.y
+
+    def jac(self, b):
+        return np.vstack((
+            1 - np.exp(-b[1] * self.x),
+            b[0] * self.x * np.exp(-b[1] * self.x)
+        )).T
+
+
+class NIST_Misra1b(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Misra1b, self).__init__("Misra1b")
+
+    def fun(self, b):
+        return b[0] * (1 - (1 + 0.5 * b[1] * self.x)**-2) - self.y
+
+    def jac(self, b):
+        return np.vstack((
+            1 - (1 + 0.5 * b[1] * self.x)**-2,
+            b[0] * self.x * (1 + 0.5 * b[1] * self.x)**-3
+        )).T
+
+
+class NIST_Misra1c(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Misra1c, self).__init__("Misra1c")
+
+    def fun(self, b):
+        return b[0] * (1 - (1 + 2 * b[1] * self.x)**-0.5) - self.y
+
+    def jac(self, b):
+        return np.vstack((
+            1 - (1 + 2 * b[1] * self.x)**-0.5,
+            b[0] * self.x * (1 + 2 * b[1] * self.x)**-1.5
+        )).T
+
+
+class NIST_Misra1d(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Misra1d).__init__("Misra1d")
+
+    def fun(self, b):
+        return b[0] * b[1] * self.x / (1 + b[1] * self.x) - self.y
+
+    def jac(self, b):
+        return np.vstack((
+            b[1] * self.x / (1 + b[1] * self.x),
+            b[0] * self.x / (1 + b[1] * self.x) *
+            (1 - b[1] * self.x / (1 + b[1] * self.x))
+        )).T
+
+
+class NIST_Nelson(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Nelson, self).__init__("Nelson")
+
+    def fun(self, b):
+        x1 = self.x[:, 0]
+        x2 = self.x[:, 1]
+
+        return b[0] - b[1] * x1 * np.exp(-b[2] * x2) - self.y
+
+    def jac(self, b):
+        x1 = self.x[:, 0]
+        x2 = self.x[:, 1]
+
+        return np.vstack((
+            np.ones_like(x1),
+            -x1 * np.exp(-b[2] * x2),
+            b[1] * x1 * x2 * np.exp(-b[2] * x2)
+        )).T
+
+
+class NIST_Rat42(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Rat42, self).__init__("Rat42")
+
+    def fun(self, b):
+        return b[0] / (1 + np.exp(b[1] - b[2] * self.x)) - self.y
+
+    def jac(self, b):
+        e = np.exp(b[1] - b[2] * self.x)
+        return np.vstack((
+            1 / (1 + e),
+            -b[0] * e / (1 + e)**2,
+            b[0] * self.x * e / (1 + e)**2
+        )).T
+
+
+class NIST_Rat43(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Rat43, self).__init__("Rat43")
+
+    def fun(self, b):
+        return b[0] * (1 + np.exp(b[1] - b[2] * self.x))**(-1 / b[3]) - self.y
+
+    def jac(self, b):
+        e = np.exp(b[1] - b[2] * self.x)
+        return np.vstack((
+            (1 + e)**(-1 / b[3]),
+            -b[0] / b[3] * e * (1 + e)**(-1 / b[3] - 1),
+            b[0] / b[3] * self.x * e * (1 + e)**(-1 / b[3] - 1),
+            b[0] / b[3]**2 * np.log(1 + e) * (1 + e)**(-1 / b[3])
+        )).T
+
+
+class NIST_Roszman1(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Roszman1).__init__("Roszman1")
+
+    def fun(self, b):
+        return (b[0] - b[1] * self.x -
+                np.arctan(b[2] / (self.x - b[3])) / np.pi - self.y)
+
+    def jac(self, b):
+        t = b[2] / (self.x - b[3])
+        return np.vstack((
+            np.ones_like(self.x),
+            -self.x,
+            -1 / (np.pi * (1 + t**2) * (self.x - b[3])),
+            -b[2] / (np.pi * (1 + t**2) * (self.x - b[3])**2)
+        )).T
+
+
+class NIST_Thurber(NISTProblemFactory):
+    def __init__(self):
+        super(NIST_Thurber).__init__("Thurber")
+
+    def fun(self, b):
+        return ((b[0] + b[1] * self.x + b[2] * self.x**2 + b[3] * self.x**3) /
+                (1 + b[4] * self.x + b[5] * self.x**2 + b[6] * self.x**3) -
+                self.y)
+
+    def jac(self, b):
+        numer = b[0] + b[1] * self.x + b[2] * self.x**2 + b[3] * self.x**3
+        denom = 1 + b[4] * self.x + b[5] * self.x**2 + b[6] * self.x**3
+        return np.vstack((
+            1 / denom,
+            self.x / denom,
+            self.x**2 / denom,
+            self.x**3 / denom,
+            -self.x * numer / denom**2,
+            -self.x**2 * numer / denom**2,
+            -self.x**3 * numer / denom**2
+        )).T
+
+
 def extract_lsq_problems():
     unbounded = []
     bounded = []
@@ -1353,5 +1879,6 @@ def extract_lsq_problems():
 
 
 if __name__ == '__main__':
-    f = BroydenTridiagonal10K()
-    print(f.check_jacobian())
+    u, b, s = extract_lsq_problems()
+    for p in u:
+        print(p.name, p.check_jacobian())
