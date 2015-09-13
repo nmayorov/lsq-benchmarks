@@ -7,7 +7,7 @@ import sys
 import numpy as np
 from scipy.optimize import fmin_l_bfgs_b, leastsq, least_squares
 from scipy.optimize._lsq.common import (
-    find_active_constraints, make_strictly_feasible, scaling_vector)
+    find_active_constraints, make_strictly_feasible, CL_scaling_vector)
 
 from leastsqbound import leastsqbound
 from lsq_problems import extract_lsq_problems
@@ -16,7 +16,7 @@ from lsq_problems import extract_lsq_problems
 def CL_optimality(x, g, lb, ub):
     lb = np.resize(lb, x.shape)
     ub = np.resize(ub, x.shape)
-    v, _ = scaling_vector(x, g, lb, ub)
+    v, _ = CL_scaling_vector(x, g, lb, ub)
     return np.linalg.norm(v * g, ord=np.inf)
 
 
@@ -195,7 +195,7 @@ def main():
 
     u, b, s = extract_lsq_problems()
 
-    if not args.u and not args.b and not args.s and not args.n:
+    if not args.u and not args.b and not args.s:
         args.u = True
         args.b = True
         args.s = True
@@ -205,7 +205,7 @@ def main():
         run_benchmark(u, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Unbounded problems")
     if args.b:
-        methods = ['lm', 'trf', 'dogbox']
+        methods = ['leastsqbound', 'trf', 'dogbox']
         run_benchmark(b, args.ftol, args.xtol, args.gtol, args.jac,
                       methods=methods, benchmark_name="Bounded problems")
     if args.s:
