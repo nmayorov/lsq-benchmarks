@@ -102,15 +102,15 @@ def run_l_bfgs_b(problem, ftol, gtol, xtol, jac):
 
 METHODS = OrderedDict([
     ("dogbox", (run_least_squares, dict(method='dogbox'))),
-    ("dogbox-s", (run_least_squares, dict(method='dogbox', scaling='jac'))),
+    ("dogbox-s", (run_least_squares, dict(method='dogbox', x_scale='jac'))),
     ("dogbox-lsmr", (run_least_squares,
-                     dict(method='dogbox', tr_solver='lsmr', scaling='jac'))),
+                     dict(method='dogbox', tr_solver='lsmr', x_scale='jac'))),
     ("trf", (run_least_squares, dict(method='trf'))),
     ("trf-loss", (run_least_squares, dict(method='trf', loss='soft_l1'))),
-    ("trf-s", (run_least_squares, dict(method='trf', scaling='jac'))),
+    ("trf-s", (run_least_squares, dict(method='trf', x_scale='jac'))),
     ("trf-lsmr", (run_least_squares, dict(method='trf', tr_solver='lsmr'))),
     ("lm", (run_least_squares, dict(method='lm'))),
-    ("lm-s", (run_least_squares, dict(method='lm', scaling='jac'))),
+    ("lm-s", (run_least_squares, dict(method='lm', x_scale='jac'))),
     ('leastsqbound', (run_leastsq_bound, dict(scaling=None))),
     ("l-bfgs-b", (run_l_bfgs_b, dict())),
     ]
